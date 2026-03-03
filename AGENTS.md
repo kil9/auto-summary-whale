@@ -16,18 +16,17 @@
   - `options_page`: `src/options/index.html`
 - `src/content/index.js`
   - YouTube 제목 옆 `Gemini` 버튼 렌더링
-  - 버튼 클릭 시 `window.open(..., "whale-space")` 실행
   - `chrome.runtime.sendMessage({ type: "OPEN_GEMINI", url })` 전송
 - `src/background/index.js`
   - 메시지/단축키 수신
-  - Gemini 탭 탐색 및 로딩 대기
+  - Gemini 새 탭 생성 및 로딩 대기
   - `chrome.scripting.executeScript`로 URL 주입/전송 시도
 - `src/options/*`
   - `showButton`, `autoInject` 설정 UI
 
 ## 핵심 제약
 
-- 웨일 듀얼탭은 사용자 제스처 및 브라우저 컨텍스트 영향이 큼
+- 웨일 듀얼탭은 컨텍스트/탭 식별 제약이 있어 주입 신뢰성이 낮음
 - Gemini UI 셀렉터는 자주 변경될 수 있어 주입 로직이 깨질 수 있음
 - YouTube는 SPA라서 `yt-navigate-finish` 대응이 필수
 
@@ -51,8 +50,8 @@
 
 ## 테스트 체크리스트
 
-- 버튼 클릭 시 Gemini가 열리는지
-- 듀얼탭/일반 탭 각각에서 URL 주입 여부
+- 버튼 클릭 시 Gemini 새 탭이 열리는지
+- 새 탭에서 URL 주입 여부
 - `autoInject` on/off 동작
 - YouTube 페이지 전환(`yt-navigate-finish`) 후 버튼 재생성 여부
 - 단축키 실행 시 탭 생성/주입 여부

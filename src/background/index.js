@@ -1,9 +1,28 @@
 const GEMINI_URL = "https://gemini.google.com/";
-const GEMINI_ORIGIN = "https://gemini.google.com";
+const LOG_PREFIX = "[auto-summary-whale/bg]";
 const DEFAULT_OPTIONS = {
   showButton: true,
   autoInject: true
 };
+
+function log(...args) {
+  console.log(LOG_PREFIX, ...args);
+}
+
+function warn(...args) {
+  console.warn(LOG_PREFIX, ...args);
+}
+
+function toTabSummary(tab) {
+  if (!tab) return null;
+  return {
+    id: tab.id,
+    windowId: tab.windowId,
+    active: tab.active,
+    status: tab.status,
+    url: tab.url
+  };
+}
 
 async function getOptions() {
   return new Promise((resolve) => {
@@ -13,125 +32,204 @@ async function getOptions() {
   });
 }
 
-function waitForTabComplete(tabId) {
+async function waitForTabComplete(tabId) {
+  if (!tabId) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab?.status === "complete") return;
+  } catch {
+    return;
+  }
+
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
     const listener = (updatedTabId, info) => {
       if (updatedTabId === tabId && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
+        finish();
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(finish, 10000);
   });
 }
 
 async function injectUrlIntoGemini(tabId, url) {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (value) => {
-      const candidateSelectors = [
-        "textarea",
-        "input[type='text']",
-        "[contenteditable='true']"
-      ];
-      let input = null;
-      for (const selector of candidateSelectors) {
-        input = document.querySelector(selector);
-        if (input) break;
-      }
-      if (!input) return;
-
-      const setValue = () => {
-        if (input.isContentEditable) {
-          input.focus();
-          input.textContent = value;
-        } else {
-          input.focus();
-          input.value = value;
-        }
-        const event = new Event("input", { bubbles: true });
-        input.dispatchEvent(event);
-      };
-
-      const clickSendIfReady = () => {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async (value) => {
+        const candidateSelectors = [
+          "textarea",
+          "input[type='text']",
+          "[contenteditable='true']"
+        ];
         const sendButtonSelectors = [
           "button[aria-label*='Send']",
           "button[aria-label*='전송']",
           "button[data-testid='send-button']",
           "button[type='submit']"
         ];
-        let button = null;
-        for (const selector of sendButtonSelectors) {
-          button = document.querySelector(selector);
-          if (button) break;
+        let input = null;
+        let matchedInputSelector = null;
+        for (const selector of candidateSelectors) {
+          input = document.querySelector(selector);
+          if (input) {
+            matchedInputSelector = selector;
+            break;
+          }
         }
-        if (button && !button.disabled) {
-          button.click();
-          return true;
+        if (!input) {
+          return {
+            ok: false,
+            stage: "find_input",
+            reason: "input_not_found",
+            locationHref: location.href,
+            readyState: document.readyState
+          };
         }
-        return false;
-      };
 
-      setValue();
+        const setNativeValue = (element, nextValue) => {
+          const proto = element.tagName === "TEXTAREA"
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+          const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+          if (descriptor?.set) {
+            descriptor.set.call(element, nextValue);
+          } else {
+            element.value = nextValue;
+          }
+        };
 
-      let attempts = 0;
-      const maxAttempts = 12;
-      const timer = setInterval(() => {
-        attempts += 1;
-        if (clickSendIfReady() || attempts >= maxAttempts) {
-          clearInterval(timer);
+        input.focus();
+        if (input.isContentEditable) {
+          input.textContent = value;
+        } else {
+          setNativeValue(input, value);
         }
-      }, 250);
-    },
-    args: [url]
-  });
-}
+        if (typeof InputEvent === "function") {
+          input.dispatchEvent(new InputEvent("input", { bubbles: true, data: value }));
+        } else {
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        input.dispatchEvent(new Event("change", { bubbles: true }));
 
-async function findNewestGeminiTab() {
-  const tabs = await chrome.tabs.query({
-    url: `${GEMINI_ORIGIN}/*`
-  });
-  if (tabs.length === 0) return null;
-  const sorted = tabs.sort((a, b) => (b.id || 0) - (a.id || 0));
-  return sorted[0].id;
-}
+        for (let attempt = 1; attempt <= 12; attempt += 1) {
+          let button = null;
+          let matchedButtonSelector = null;
+          for (const selector of sendButtonSelectors) {
+            button = document.querySelector(selector);
+            if (button) {
+              matchedButtonSelector = selector;
+              break;
+            }
+          }
+          if (button && !button.disabled) {
+            button.click();
+            return {
+              ok: true,
+              stage: "send_clicked",
+              attempt,
+              matchedInputSelector,
+              matchedButtonSelector,
+              locationHref: location.href,
+              readyState: document.readyState
+            };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
 
-async function waitForGeminiTabAndInject(url, maxAttempts = 20) {
-  for (let i = 0; i < maxAttempts; i++) {
-    const tabId = await findNewestGeminiTab();
-    if (tabId) {
-      await waitForTabComplete(tabId);
-      const { autoInject } = await getOptions();
-      if (autoInject && url) {
-        await injectUrlIntoGemini(tabId, url);
-      }
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 100));
+        const pressEnter = () => {
+          input.focus();
+          const keydown = new KeyboardEvent("keydown", {
+            key: "Enter",
+            code: "Enter",
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true
+          });
+          input.dispatchEvent(keydown);
+          const keyup = new KeyboardEvent("keyup", {
+            key: "Enter",
+            code: "Enter",
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true
+          });
+          input.dispatchEvent(keyup);
+        };
+
+        pressEnter();
+
+        return {
+          ok: true,
+          stage: "enter_fallback",
+          reason: "send_button_not_clickable_used_enter",
+          matchedInputSelector,
+          locationHref: location.href,
+          readyState: document.readyState
+        };
+      },
+      args: [url]
+    });
+    const result = results?.[0]?.result || null;
+    log("injectUrlIntoGemini result", { tabId, result });
+    return result;
+  } catch (error) {
+    warn("injectUrlIntoGemini executeScript failed", {
+      tabId,
+      error: String(error)
+    });
+    return {
+      ok: false,
+      stage: "execute_script",
+      reason: "execute_script_failed",
+      error: String(error)
+    };
   }
 }
 
-async function handleOpenGemini(sourceTab) {
-  const url = sourceTab?.url;
-  await waitForGeminiTabAndInject(url);
+async function openGeminiInNewTabAndInject(url) {
+  const geminiTab = await chrome.tabs.create({
+    url: GEMINI_URL,
+    active: true
+  });
+  if (!geminiTab?.id) {
+    warn("failed to create Gemini tab");
+    return;
+  }
+  log("Gemini tab created", { tab: toTabSummary(geminiTab) });
+  await waitForTabComplete(geminiTab.id);
+  const { autoInject } = await getOptions();
+  log("autoInject option", { autoInject, hasUrl: Boolean(url) });
+  if (autoInject && url) {
+    await injectUrlIntoGemini(geminiTab.id, url);
+  }
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "OPEN_GEMINI") return;
-  handleOpenGemini(sender.tab || { url: message.url });
+  const sourceUrl = sender?.tab?.url || message?.url || "";
+  log("OPEN_GEMINI message received", {
+    sourceUrl,
+    senderTab: toTabSummary(sender?.tab)
+  });
+  sendResponse({ accepted: true });
+  openGeminiInNewTabAndInject(sourceUrl).catch((error) => {
+    warn("OPEN_GEMINI flow failed", String(error));
+  });
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== "open-gemini") return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
-  const { autoInject } = await getOptions();
-  const geminiTab = await chrome.tabs.create({
-    url: GEMINI_URL,
-    active: true
-  });
-  if (autoInject && tab.url) {
-    await waitForTabComplete(geminiTab.id);
-    await injectUrlIntoGemini(geminiTab.id, tab.url);
-  }
+  await openGeminiInNewTabAndInject(tab.url);
 });

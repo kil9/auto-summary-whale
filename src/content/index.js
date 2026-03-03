@@ -1,7 +1,12 @@
 const GEMINI_URL = "https://gemini.google.com/";
+const LOG_PREFIX = "[auto-summary-whale/content]";
 const DEFAULT_OPTIONS = {
   showButton: true
 };
+const EXTENSION_API =
+  (typeof chrome !== "undefined" && chrome?.runtime && chrome?.storage && chrome) ||
+  (typeof whale !== "undefined" && whale?.runtime && whale?.storage && whale) ||
+  null;
 
 const BUTTON_ID = "auto-summary-whale-button";
 let observer = null;
@@ -44,11 +49,37 @@ function createButton() {
   button.style.verticalAlign = "middle";
 
   button.addEventListener("click", () => {
-    window.open(GEMINI_URL, "_blank", "whale-space");
-    chrome.runtime.sendMessage({
-      type: "OPEN_GEMINI",
-      url: window.location.href
-    });
+    const currentUrl = window.location.href;
+    try {
+      if (!EXTENSION_API?.runtime?.sendMessage) {
+        throw new Error("runtime API unavailable");
+      }
+      EXTENSION_API.runtime.sendMessage(
+        {
+          type: "OPEN_GEMINI",
+          url: currentUrl
+        },
+        () => {
+          try {
+            const message = EXTENSION_API?.runtime?.lastError?.message || "";
+            if (message) {
+              if (!message.includes("before a response was received")) {
+                console.warn(LOG_PREFIX, "OPEN_GEMINI sendMessage failed", message);
+              }
+              window.open(GEMINI_URL, "_blank");
+              return;
+            }
+            console.log(LOG_PREFIX, "OPEN_GEMINI sent", { url: currentUrl });
+          } catch (error) {
+            console.warn(LOG_PREFIX, "OPEN_GEMINI callback failed", String(error));
+            window.open(GEMINI_URL, "_blank");
+          }
+        }
+      );
+    } catch (error) {
+      console.warn(LOG_PREFIX, "OPEN_GEMINI dispatch failed", String(error));
+      window.open(GEMINI_URL, "_blank");
+    }
   });
 
   insertAfter(titleElement, button);
@@ -86,18 +117,23 @@ function updateButtonVisibility(showButton) {
 }
 
 function init() {
-  chrome.storage.sync.get(DEFAULT_OPTIONS, (items) => {
+  if (!EXTENSION_API?.storage?.sync) {
+    updateButtonVisibility(true);
+    return;
+  }
+
+  EXTENSION_API.storage.sync.get(DEFAULT_OPTIONS, (items) => {
     updateButtonVisibility(items.showButton);
   });
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  EXTENSION_API.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync" || !changes.showButton) return;
     updateButtonVisibility(changes.showButton.newValue);
   });
 
   document.addEventListener("yt-navigate-finish", () => {
     if (document.getElementById(BUTTON_ID)) return;
-    chrome.storage.sync.get(DEFAULT_OPTIONS, (items) => {
+    EXTENSION_API.storage.sync.get(DEFAULT_OPTIONS, (items) => {
       if (items.showButton) updateButtonVisibility(true);
     });
   });

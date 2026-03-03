@@ -7,7 +7,7 @@ YouTube 시청 중 버튼 또는 단축키로 Gemini를 빠르게 여는 웨일(
 ## 주요 기능
 
 - YouTube 영상 제목 옆 `Gemini` 버튼 표시
-- 버튼 클릭 시 Gemini 열기 (웨일 듀얼탭 시도)
+- 버튼 클릭 시 Gemini를 일반 새 탭으로 열기
 - 단축키 `Ctrl+Shift+U` (`mac`: `Command+Shift+U`) 지원
 - 현재 영상 URL 자동 입력 + 전송 시도
 - 옵션 페이지에서 버튼 표시/자동 입력 설정
@@ -15,10 +15,10 @@ YouTube 시청 중 버튼 또는 단축키로 Gemini를 빠르게 여는 웨일(
 ## 동작 방식 요약
 
 - **버튼 클릭**
-  - Content Script가 `window.open(..., "whale-space")`로 Gemini를 엽니다.
-  - 동시에 Background로 `OPEN_GEMINI` 메시지를 보내 현재 YouTube URL을 전달합니다.
+  - Content Script가 Background로 `OPEN_GEMINI` 메시지를 보냅니다.
+  - Background가 Gemini를 일반 새 탭으로 열고 URL 주입/전송을 시도합니다.
 - **Background**
-  - 가장 최근 Gemini 탭을 찾고 로딩 완료를 기다립니다.
+  - 새 Gemini 탭을 열고 로딩 완료를 기다립니다.
   - 입력 요소를 찾아 URL을 주입하고 전송 버튼 클릭을 시도합니다.
 - **단축키 실행**
   - 사용자 제스처 제약으로 일반 새 탭에서 Gemini를 열고 URL 주입을 수행합니다.
@@ -34,7 +34,7 @@ YouTube 시청 중 버튼 또는 단축키로 Gemini를 빠르게 여는 웨일(
 
 1. YouTube 영상 페이지(`https://www.youtube.com/watch?...`)로 이동합니다.
 2. 제목 오른쪽 `Gemini` 버튼을 클릭하거나 단축키를 누릅니다.
-3. Gemini 탭/듀얼탭이 열리면 URL 자동 입력 및 전송 여부를 확인합니다.
+3. Gemini 새 탭이 열리면 URL 자동 입력 및 전송 여부를 확인합니다.
 
 ## 옵션
 
